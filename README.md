@@ -32,7 +32,7 @@ MambaCrackNet/
     └── MambaCrackNet-ForGithubVersion.ipynb
 ```
 
-`checkpoints/` is created automatically the first time training saves a model.
+`checkpoints/` and `logs/` are created on demand by training runs (`mkdir -p logs checkpoints` once before the first run) and are both gitignored.
 
 ## Datasets
 
@@ -57,6 +57,13 @@ python train.py \
     --mask-test-dir   dataset/CCSD/Test_BW \
     --epochs 100 --batch-size 2
 
+# 2c. train from a single {images, masks} folder with an internal train/test split
+python train.py \
+    --image-dir   /workspace/nas_200/minkyung/unified/CCSD/images \
+    --mask-dir    /workspace/nas_200/minkyung/unified/CCSD/masks \
+    --test-split  0.2 \
+    --epochs 100 --batch-size 2
+
 # 3. evaluate a saved checkpoint
 python test.py \
     --image-test-dir dataset/CCSD/Test_rgb \
@@ -64,7 +71,103 @@ python test.py \
     --checkpoint ./checkpoints/mamba_crack_net.pt
 ```
 
-Run the commands from the repository root so the `config`, `models`, `data`, and `utils` packages resolve correctly. The default model expects `512 × 512` RGB images and binary masks; image / mask pairs are matched by filename.
+Run the commands from the repository root so the `config`, `models`, `data`, and `utils` packages resolve correctly. The default model expects `512 × 512` RGB images and binary masks; image / mask pairs are matched by stem (extension-agnostic — e.g. `images/001.jpg` ↔ `masks/001.png`).
+
+## Reproducing the CCSD baseline (original paper)
+
+To replicate the original MambaCrackNet result, train on **CCSD only** using the unified data on NAS and the hyperparameters lifted from [tensorflow/MambaCrackNet-ForGithubVersion.ipynb](tensorflow/MambaCrackNet-ForGithubVersion.ipynb) (Adam `lr=1e-4`, batch=2, 100 epochs, 512×512 RGB, random horizontal flip):
+
+```bash
+python train.py \
+    --image-dir   /workspace/nas_200/minkyung/unified/CCSD/images \
+    --mask-dir    /workspace/nas_200/minkyung/unified/CCSD/masks \
+    --test-split  0.2 \
+    --seed        2024 \
+    --epochs      100 \
+    --batch-size  2 \
+    --lr          1e-4 \
+    --checkpoint  ./checkpoints/ccsd_baseline.pt
+```
+
+This:
+- loads all 446 CCSD pairs from the unified folder and deterministically splits them **357 train / 89 test** (`test_ratio=0.2`, `seed=2024`);
+- trains for 100 epochs with the original recipe and saves a new checkpoint every time the validation mean-IoU improves;
+- after the final epoch, automatically reloads the best checkpoint and prints the full test-metric suite (`iou`, `accuracy`, `precision`, `recall`, `f1`, `mae`) — matching the metrics used in the original notebook.
+
+To re-evaluate the saved baseline later without retraining:
+
+```bash
+python test.py \
+    --image-test-dir /workspace/nas_200/minkyung/unified/CCSD/images \
+    --mask-test-dir  /workspace/nas_200/minkyung/unified/CCSD/masks \
+    --checkpoint     ./checkpoints/ccsd_baseline.pt
+```
+
+Note that `test.py` evaluates over **all** pairs in the folders you give it; to match the training-time test split exactly, point it at a held-out folder or symlink only the 89 test images / masks there.
+
+## Running long training jobs (logs & background execution)
+
+A full 100-epoch CCSD baseline takes roughly **3 hours** on a single RTX A5000 (≈14.9 GB peak GPU memory at batch=2). Run it in the background with `nohup` so it survives terminal disconnects, and redirect both stdout and stderr to a log file you can `tail -f` later.
+
+### One-time setup
+
+The redirect target directory has to exist *before* the shell parses the `>` operator — otherwise zsh aborts with `no such file or directory`. Create both folders once at the start:
+
+```bash
+cd /workspace/minkyung/Dron/MambaCrackNet
+mkdir -p logs checkpoints
+```
+
+### Launch the training in the background
+
+```bash
+nohup python train.py \
+    --image-dir   /workspace/nas_200/minkyung/unified/CCSD/images \
+    --mask-dir    /workspace/nas_200/minkyung/unified/CCSD/masks \
+    --test-split  0.2 --seed 2024 \
+    --epochs 100 --batch-size 2 --lr 1e-4 \
+    --checkpoint ./checkpoints/ccsd_baseline.pt \
+    > logs/ccsd_baseline.log 2>&1 &
+```
+
+The shell prints `[1] <PID>` — note that PID, you'll use it to inspect or kill the job.
+
+### Monitor progress
+
+```bash
+# follow the log live
+tail -f logs/ccsd_baseline.log
+
+# check the process is still alive
+jobs -l                  # in the same shell where you launched it
+ps -fp <PID>             # from anywhere
+nvidia-smi               # GPU utilisation / memory
+
+# stop the run cleanly
+kill <PID>
+```
+
+Log lines you should see early on:
+
+```
+Single-source split: 357 train / 89 test (ratio=0.2, seed=2024)
+Epoch    0  loss=...  valid_mean_iou=...
+  -> saved checkpoint (./checkpoints/ccsd_baseline.pt)
+...
+=== Final test metrics (best checkpoint) ===
+        iou: ...
+   accuracy: ...
+   ...
+```
+
+### Log conventions
+
+- One log file per run, named after the experiment (`logs/ccsd_baseline.log`, `logs/ccsd_finetune.log`, …).
+- The `logs/` folder is in [.gitignore](.gitignore) and never committed.
+- Use `tee` instead of `>` if you want to follow the run live in the foreground while also keeping the log:
+  ```bash
+  python train.py ... 2>&1 | tee logs/ccsd_baseline.log
+  ```
 
 ## Model overview
 

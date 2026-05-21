@@ -84,3 +84,91 @@ python train.py \
 ## Per-dataset notes (folder structure after extracting)
 
 The four archives ship in slightly different layouts. After unzipping, you may need to rename folders / split a train-test partition so that each one ends up in the `{rgb, BW, Test_rgb, Test_BW}` shape expected by [`data/dataset.py`](../data/dataset.py). Document any per-dataset preprocessing steps you apply here so the next person can reproduce them.
+
+---
+
+## Training pipeline & unified layout
+
+We replicate the original MambaCrackNet result in two stages:
+
+1. **Baseline** — train on **CCSD only** to reproduce the published checkpoint.
+2. **Fine-tune** — continue training on a **mixture of all four datasets** (CCSD + BCL + NCCD-PF + LCW) to improve generalisation.
+
+Because the four sources ship with **different folder layouts, file extensions, mask polarities, and naming conventions**, we first normalise everything into a single unified directory tree. The normalisation script lives next to the raw archives on the NAS:
+
+- Script: `/workspace/nas_200/minkyung/unify_datasets.py`
+- Output: `/workspace/nas_200/minkyung/unified/`
+
+### Unified directory layout
+
+```
+/workspace/nas_200/minkyung/unified/
+├── CCSD/         { images/  masks/ }
+├── BCL_NonSteel/ { images/  masks/ }   # BCL split into two subsets
+├── BCL_Steel/    { images/  masks/ }
+├── NCCD/         { images/  masks/ }
+├── LCW/          { images/  masks/ }   # Train + Test merged
+└── summary.json                        # pair counts and crack-present stats
+```
+
+Inside each subset:
+
+- `images/` — **symlinks** to the original image files (no re-encoding; saves disk and avoids quality loss).
+- `masks/` — **freshly written PNGs**, mode `L`, strictly binary `{0, 255}`, with **background = 0 and crack = 255**.
+- Image and mask filenames share the same stem (e.g. `images/0001.jpg` ↔ `masks/0001.png`).
+
+### Normalisation rules per dataset
+
+| Dataset | Image handling | Mask handling | Filename rule |
+|---|---|---|---|
+| **CCSD** | symlink originals (`.jpg`) | decoded to `L`, then **thresholded at 127** to absorb JPEG artifacts | keep original stem |
+| **BCL_NonSteel** / **BCL_Steel** | symlink originals | decoded to `L`, then **inverted** (`255 - arr`) because the source uses *white background / black crack*, then thresholded | keep original stem; the two BCL subsets (`Non-steel crack images`, `Steel crack images`) are kept separate so they can be sampled independently |
+| **NCCD-PF** | symlink originals | decoded to `L` (mask is grayscale; channel 0 used) and thresholded | source uses `image_N` / `mask_N` — both **renamed to `N`** so image and mask stems match |
+| **LCW** | symlink originals | decoded to `L` and thresholded (already correct polarity) | original `Train/` and `Test/` are merged with **`train_` / `test_` filename prefix** to avoid collisions while preserving provenance |
+
+Threshold used everywhere: `pixel > 127 → 255 (crack)`, otherwise `0`.
+
+### Adapting the unified layout to the training code
+
+The training code currently expects the CCSD-style `{rgb, BW, Test_rgb, Test_BW}` layout (see [Expected folder layout](#expected-folder-layout)). The unified tree uses `{images, masks}` without a train/test split. To bridge the two there are two options:
+
+**(a) Project the unified data into the CCSD layout.** Decide a train/test split per subset, then symlink:
+
+```bash
+# example: use CCSD as the baseline, holding out e.g. the last 10% as test
+cd /workspace/minkyung/Dron/MambaCrackNet
+mkdir -p dataset/CCSD/{rgb,BW,Test_rgb,Test_BW}
+# (split logic goes here — populate the four folders with symlinks)
+```
+
+**(b) Point the CLI directly at the unified tree** and split inside the dataloader. This avoids duplicating the directory layout but requires a small change to `data/dataset.py` to accept a single `{images, masks}` folder plus a train/test split ratio. Track this as a TODO if/when we go this route.
+
+### Baseline run (CCSD only)
+
+```bash
+# from repo root, with the unified tree visible at /workspace/nas_200/minkyung/unified/
+python train.py \
+    --image-dir       /workspace/nas_200/minkyung/unified/CCSD/images \
+    --mask-dir        /workspace/nas_200/minkyung/unified/CCSD/masks \
+    --image-test-dir  /workspace/nas_200/minkyung/unified/CCSD/images \
+    --mask-test-dir   /workspace/nas_200/minkyung/unified/CCSD/masks \
+    --epochs 100 --batch-size 2
+```
+
+*(The example above reuses the same folder for train and test only as a placeholder — replace with a proper split once option (a) or (b) above is in place.)*
+
+### Fine-tuning on the four-dataset mixture
+
+After the CCSD baseline checkpoint is saved, fine-tune on the union of all five subset folders (`CCSD`, `BCL_NonSteel`, `BCL_Steel`, `NCCD`, `LCW`). The simplest realisation is to create a fifth folder that contains symlinks to every unified `images/` and `masks/` pair, then point the CLI at it. If you prefer per-subset weighting (e.g. up-sampling LCW because it has the smallest pair count), capture the recipe in this README when you settle on it.
+
+### Status of the unification (as of last NAS check)
+
+| Subset | Mask PNGs written | Notes |
+|---|---:|---|
+| BCL_NonSteel | 5,769 | masks inverted |
+| BCL_Steel    | 2,036 | masks inverted |
+| CCSD         |   446 | JPG masks rebinarised |
+| LCW          |   796 | Train+Test merged with `train_`/`test_` prefix |
+| NCCD         | 5,388 | `image_N`/`mask_N` renamed to `N` |
+
+Image symlinks are populated by the same script — re-run `unify_datasets.py` if the `images/` folders ever look out of sync with `masks/`. The authoritative pair counts and crack-present statistics land in `/workspace/nas_200/minkyung/unified/summary.json`.

@@ -8,6 +8,10 @@ checkpoints/
 *.pt
 *.h5
 
+# Training logs
+logs/
+*.log
+
 # Dataset payloads — keep the README, ignore everything else
 dataset/*
 !dataset/README.md
