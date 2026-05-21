@@ -18,6 +18,9 @@ class ModelConfig:
 
 @dataclass
 class DataConfig:
+    # Default convention: datasets live under ./dataset/<name>/{rgb,BW,Test_rgb,Test_BW}.
+    # See dataset/README.md for the full layout and download instructions.
+    # Override via CLI flags when the data lives elsewhere (e.g. on a NAS mount).
     image_dir: str = "./dataset/rgb"
     mask_dir: str = "./dataset/BW"
     image_test_dir: str = "./dataset/Test_rgb"

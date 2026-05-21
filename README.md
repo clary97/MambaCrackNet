@@ -13,6 +13,8 @@ This repository ships both the original TensorFlow notebook and a re-implementat
 MambaCrackNet/
 ├── MambaCrackNet-ForGithubVersion.ipynb   # original TensorFlow notebook (kept for reference)
 ├── README.md
+├── dataset/                               # default dataset location (see dataset/README.md)
+│   └── README.md
 └── pytorch/                               # PyTorch re-implementation
     ├── config.py                          # ModelConfig / DataConfig / TrainConfig dataclasses
     ├── train.py                           # training entry point
@@ -31,24 +33,33 @@ MambaCrackNet/
     └── checkpoints/                       # default save location
 ```
 
+## Datasets
+
+The PyTorch port targets four public crack-segmentation datasets: **BCL**, **NCCD-PF**, **LCW**, and **CCSD**. By convention all data is kept under [`dataset/`](dataset/) (the default in [`pytorch/config.py`](pytorch/config.py)), though every path can be overridden via CLI flags.
+
+See **[`dataset/README.md`](dataset/README.md)** for the full list of sources / DOIs, the expected folder layout, the NAS location of the source archives, and per-dataset preprocessing notes.
+
 ## Quick start (PyTorch)
 
 ```bash
 # 1. install dependencies
 pip install -r pytorch/requirements.txt
 
-# 2. train (point the CLI flags at your dataset)
+# 2a. train using the default ./dataset/{rgb,BW,Test_rgb,Test_BW} layout
+python -m pytorch.train --epochs 100 --batch-size 2
+
+# 2b. train against an arbitrary dataset location (override the defaults)
 python -m pytorch.train \
-    --image-dir       /path/to/concreteCrackSegmentationDataset/rgb \
-    --mask-dir        /path/to/concreteCrackSegmentationDataset/BW \
-    --image-test-dir  /path/to/concreteCrackSegmentationDataset/Test_rgb \
-    --mask-test-dir   /path/to/concreteCrackSegmentationDataset/Test_BW \
+    --image-dir       dataset/CCSD/rgb \
+    --mask-dir        dataset/CCSD/BW \
+    --image-test-dir  dataset/CCSD/Test_rgb \
+    --mask-test-dir   dataset/CCSD/Test_BW \
     --epochs 100 --batch-size 2
 
 # 3. evaluate a saved checkpoint
 python -m pytorch.test \
-    --image-test-dir /path/to/Test_rgb \
-    --mask-test-dir  /path/to/Test_BW \
+    --image-test-dir dataset/CCSD/Test_rgb \
+    --mask-test-dir  dataset/CCSD/Test_BW \
     --checkpoint ./checkpoints/mamba_crack_net.pt
 ```
 

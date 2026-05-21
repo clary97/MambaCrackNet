@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Checkpoints / runs
+pytorch/checkpoints/
+*.pt
+*.h5
+
+# Dataset payloads — keep the README, ignore everything else
+dataset/*
+!dataset/README.md
