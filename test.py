@@ -5,10 +5,10 @@ from pathlib import Path
 
 import torch
 
-from .config import Config
-from .data import CrackDataset
-from .models import MambaCrackNet
-from .utils import SegmentationMetrics
+from config import Config
+from data import CrackDataset
+from models import MambaCrackNet
+from utils import SegmentationMetrics
 
 
 def parse_args() -> argparse.Namespace:

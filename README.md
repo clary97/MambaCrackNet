@@ -1,55 +1,56 @@
 # MambaCrackNet
 
-Code for the published paper titled "Enhancing Pixel-Level Crack Segmentation with Visual Mamba and Convolutional Networks" on Automation in Construction.
+PyTorch re-implementation of *"Enhancing Pixel-Level Crack Segmentation with Visual Mamba and Convolutional Networks"* (Automation in Construction).
 
-- Original: https://github.com/ChengjiaHanSEU/MambaCrackNet
+- Original (TensorFlow) repository: https://github.com/ChengjiaHanSEU/MambaCrackNet
 - Paper: "Enhancing Pixel-Level Crack Segmentation with Visual Mamba and CNN"
 
-This repository ships both the original TensorFlow notebook and a re-implementation in PyTorch organised as a small package.
+The PyTorch port lives at the repository root; the original TensorFlow notebook is preserved under [`tensorflow/`](tensorflow/) for reference.
 
 ## Repository layout
 
 ```
 MambaCrackNet/
-├── MambaCrackNet-ForGithubVersion.ipynb   # original TensorFlow notebook (kept for reference)
 ├── README.md
-├── dataset/                               # default dataset location (see dataset/README.md)
-│   └── README.md
-└── pytorch/                               # PyTorch re-implementation
-    ├── config.py                          # ModelConfig / DataConfig / TrainConfig dataclasses
-    ├── train.py                           # training entry point
-    ├── test.py                            # evaluation entry point
-    ├── requirements.txt
-    ├── models/
-    │   ├── drop_path.py                   # DropPath stochastic depth
-    │   ├── mamba.py                       # RMSNorm, selective_scan, SSM, MambaBlock, MambaResidualBlock
-    │   ├── patches.py                     # PatchExtract / PatchEmbedding / PatchMerging / PatchExpanding
-    │   ├── blocks.py                      # Mlp, ConvResidualBlock (image-domain)
-    │   └── mamba_crack_net.py             # full MambaCrackNet model
-    ├── data/
-    │   └── dataset.py                     # CrackDataset + build_dataloaders
-    ├── utils/
-    │   └── metrics.py                     # IoU / accuracy / precision / recall / F1 / MAE
-    └── checkpoints/                       # default save location
+├── requirements.txt
+├── config.py                              # ModelConfig / DataConfig / TrainConfig dataclasses
+├── train.py                               # training entry point
+├── test.py                                # evaluation entry point
+├── models/
+│   ├── drop_path.py                       # DropPath stochastic depth
+│   ├── mamba.py                           # RMSNorm, selective_scan, SSM, MambaBlock, MambaResidualBlock
+│   ├── patches.py                         # PatchExtract / PatchEmbedding / PatchMerging / PatchExpanding
+│   ├── blocks.py                          # Mlp, ConvResidualBlock (image-domain)
+│   └── mamba_crack_net.py                 # full MambaCrackNet model
+├── data/
+│   └── dataset.py                         # CrackDataset + build_dataloaders
+├── utils/
+│   └── metrics.py                         # IoU / accuracy / precision / recall / F1 / MAE
+├── dataset/                               # default location for raw datasets
+│   └── README.md                          # dataset sources, layout, NAS paths
+└── tensorflow/                            # original TensorFlow notebook (kept for reference)
+    └── MambaCrackNet-ForGithubVersion.ipynb
 ```
+
+`checkpoints/` is created automatically the first time training saves a model.
 
 ## Datasets
 
-The PyTorch port targets four public crack-segmentation datasets: **BCL**, **NCCD-PF**, **LCW**, and **CCSD**. By convention all data is kept under [`dataset/`](dataset/) (the default in [`pytorch/config.py`](pytorch/config.py)), though every path can be overridden via CLI flags.
+The PyTorch port targets four public crack-segmentation datasets: **BCL**, **NCCD-PF**, **LCW**, and **CCSD**. By convention all data is kept under [`dataset/`](dataset/) (the default in [`config.py`](config.py)), though every path can be overridden via CLI flags.
 
 See **[`dataset/README.md`](dataset/README.md)** for the full list of sources / DOIs, the expected folder layout, the NAS location of the source archives, and per-dataset preprocessing notes.
 
-## Quick start (PyTorch)
+## Quick start
 
 ```bash
 # 1. install dependencies
-pip install -r pytorch/requirements.txt
+pip install -r requirements.txt
 
 # 2a. train using the default ./dataset/{rgb,BW,Test_rgb,Test_BW} layout
-python -m pytorch.train --epochs 100 --batch-size 2
+python train.py --epochs 100 --batch-size 2
 
 # 2b. train against an arbitrary dataset location (override the defaults)
-python -m pytorch.train \
+python train.py \
     --image-dir       dataset/CCSD/rgb \
     --mask-dir        dataset/CCSD/BW \
     --image-test-dir  dataset/CCSD/Test_rgb \
@@ -57,13 +58,13 @@ python -m pytorch.train \
     --epochs 100 --batch-size 2
 
 # 3. evaluate a saved checkpoint
-python -m pytorch.test \
+python test.py \
     --image-test-dir dataset/CCSD/Test_rgb \
     --mask-test-dir  dataset/CCSD/Test_BW \
     --checkpoint ./checkpoints/mamba_crack_net.pt
 ```
 
-The default model expects `512 × 512` RGB images and binary masks; image / mask pairs are matched by filename.
+Run the commands from the repository root so the `config`, `models`, `data`, and `utils` packages resolve correctly. The default model expects `512 × 512` RGB images and binary masks; image / mask pairs are matched by filename.
 
 ## Model overview
 

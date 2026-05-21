@@ -1,6 +1,6 @@
 # Datasets
 
-This folder is the **default location** for all datasets consumed by MambaCrackNet (configured in [`pytorch/config.py`](../pytorch/config.py)). Datasets are not tracked in git — only this README is.
+This folder is the **default location** for all datasets consumed by MambaCrackNet (configured in [`config.py`](../config.py)). Datasets are not tracked in git — only this README is.
 
 The path can always be overridden at run time via the training / evaluation CLI flags (`--image-dir`, `--mask-dir`, `--image-test-dir`, `--mask-test-dir`), so you are free to keep the raw data wherever is convenient (e.g. on a NAS mount).
 
@@ -74,7 +74,7 @@ ln -s CCSD/Test_rgb  dataset/Test_rgb
 ln -s CCSD/Test_BW   dataset/Test_BW
 
 # option B — pass full paths through the CLI
-python -m pytorch.train \
+python train.py \
     --image-dir       dataset/CCSD/rgb \
     --mask-dir        dataset/CCSD/BW \
     --image-test-dir  dataset/CCSD/Test_rgb \
@@ -83,4 +83,4 @@ python -m pytorch.train \
 
 ## Per-dataset notes (folder structure after extracting)
 
-The four archives ship in slightly different layouts. After unzipping, you may need to rename folders / split a train-test partition so that each one ends up in the `{rgb, BW, Test_rgb, Test_BW}` shape expected by [`pytorch/data/dataset.py`](../pytorch/data/dataset.py). Document any per-dataset preprocessing steps you apply here so the next person can reproduce them.
+The four archives ship in slightly different layouts. After unzipping, you may need to rename folders / split a train-test partition so that each one ends up in the `{rgb, BW, Test_rgb, Test_BW}` shape expected by [`data/dataset.py`](../data/dataset.py). Document any per-dataset preprocessing steps you apply here so the next person can reproduce them.

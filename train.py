@@ -1,7 +1,7 @@
 """Train MambaCrackNet on a paired (image, mask) crack-segmentation dataset.
 
 Usage:
-    python -m pytorch.train \
+    python train.py \
         --image-dir /path/to/rgb \
         --mask-dir /path/to/BW \
         --image-test-dir /path/to/Test_rgb \
@@ -19,10 +19,10 @@ import torch
 import torch.nn as nn
 from torch.optim import Adam
 
-from .config import Config
-from .data import build_dataloaders
-from .models import MambaCrackNet
-from .utils import SegmentationMetrics
+from config import Config
+from data import build_dataloaders
+from models import MambaCrackNet
+from utils import SegmentationMetrics
 
 
 def set_seed(seed: int) -> None:

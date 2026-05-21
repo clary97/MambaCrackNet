@@ -4,7 +4,7 @@ __pycache__/
 *.pyo
 
 # Checkpoints / runs
-pytorch/checkpoints/
+checkpoints/
 *.pt
 *.h5
 
