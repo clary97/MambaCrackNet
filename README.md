@@ -105,6 +105,25 @@ python test.py \
 
 Note that `test.py` evaluates over **all** pairs in the folders you give it; to match the training-time test split exactly, point it at a held-out folder or symlink only the 89 test images / masks there.
 
+## Inspecting predictions visually
+
+Use [inference.py](inference.py) to render per-image visualisations from a trained checkpoint. Each output is a single PNG that tiles four panels horizontally — `input | ground truth | prediction (with per-image IoU) | red overlay` — so you can scroll through them in VSCode or any image viewer.
+
+```bash
+# render the 89 held-out CCSD test images (matches train.py --test-split 0.2 --seed 2024)
+python inference.py \
+    --image-dir   /workspace/nas_200/minkyung/unified/CCSD/images \
+    --mask-dir    /workspace/nas_200/minkyung/unified/CCSD/masks \
+    --test-split  0.2 --seed 2024 \
+    --checkpoint  ./checkpoints/ccsd_baseline.pt \
+    --output-dir  ./predictions/ccsd_baseline
+
+# or just render a few samples to sanity-check
+python inference.py ... --limit 8
+```
+
+Outputs land under `./predictions/<name>/<stem>.png`. The folder is gitignored so renderings never end up in the repo. Drop `--test-split` to render every pair in the folders you point at.
+
 ## Running long training jobs (logs & background execution)
 
 A full 100-epoch CCSD baseline takes roughly **3 hours** on a single RTX A5000 (≈14.9 GB peak GPU memory at batch=2). Run it in the background with `nohup` so it survives terminal disconnects, and redirect both stdout and stderr to a log file you can `tail -f` later.
