@@ -1,4 +1,4 @@
-"""Segmentation metrics: IoU, accuracy, precision, recall, F1, MAE."""
+"""Segmentation metrics: IoU, accuracy, precision, recall, F1, MAE, TPR, FPR."""
 
 from dataclasses import dataclass, field
 from typing import Dict, List
@@ -37,22 +37,49 @@ def mean_iou(pred: torch.Tensor, target: torch.Tensor, num_classes: int = 2) -> 
     return sum(valid) / len(valid)
 
 
+def class_iou(pred: torch.Tensor, target: torch.Tensor, class_idx: int = 1) -> float:
+    """IoU computed for a single class only (default: class 1 = crack).
+
+    Useful for thin-structure tasks where the class-averaged ``mean_iou`` is
+    dominated by the background class.
+    """
+    pred = pred.view(-1)
+    target = target.view(-1)
+    pred_c = pred == class_idx
+    target_c = target == class_idx
+    inter = (pred_c & target_c).sum().item()
+    union = (pred_c | target_c).sum().item()
+    if union == 0:
+        return float("nan")
+    return inter / union
+
+
 @dataclass
 class SegmentationMetrics:
-    """Per-sample metric collector, mirroring the original notebook."""
+    """Per-sample metric collector.
+
+    Mirrors the original notebook's set plus TPR / FPR. For a binary task
+    (positive = class 1):
+        TPR = TP / (TP + FN)   (== recall / sensitivity)
+        FPR = FP / (FP + TN)   (== 1 - specificity)
+    """
 
     num_classes: int = 2
-    iou: List[float] = field(default_factory=list)
+    iou: List[float] = field(default_factory=list)        # class-averaged (background + crack)
+    crack_iou: List[float] = field(default_factory=list)  # crack class (class 1) only
     accuracy: List[float] = field(default_factory=list)
     precision: List[float] = field(default_factory=list)
     recall: List[float] = field(default_factory=list)
     f1: List[float] = field(default_factory=list)
     mae: List[float] = field(default_factory=list)
+    tpr: List[float] = field(default_factory=list)
+    fpr: List[float] = field(default_factory=list)
 
     def update(self, pred: torch.Tensor, target: torch.Tensor) -> None:
         """`pred` and `target` are integer class-index tensors with the same shape."""
         for p, t in zip(pred, target):
             self.iou.append(mean_iou(p, t, num_classes=self.num_classes))
+            self.crack_iou.append(class_iou(p, t, class_idx=1))
             tp, fp, fn, tn = _confusion_counts(p, t)
             total = tp + fp + fn + tn
             self.accuracy.append((tp + tn) / total if total else 0.0)
@@ -64,16 +91,22 @@ class SegmentationMetrics:
             )
             diff = (p != t).float().mean().item()
             self.mae.append(diff)
+            self.tpr.append(tp / (tp + fn) if (tp + fn) else 0.0)
+            self.fpr.append(fp / (fp + tn) if (fp + tn) else 0.0)
 
     def averages(self) -> Dict[str, float]:
         def avg(xs):
+            xs = [v for v in xs if v == v]  # drop NaNs (image with no crack in GT)
             return sum(xs) / len(xs) if xs else 0.0
 
         return {
             "iou": avg(self.iou),
+            "crack_iou": avg(self.crack_iou),
             "accuracy": avg(self.accuracy),
             "precision": avg(self.precision),
             "recall": avg(self.recall),
             "f1": avg(self.f1),
             "mae": avg(self.mae),
+            "tpr": avg(self.tpr),
+            "fpr": avg(self.fpr),
         }

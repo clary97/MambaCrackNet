@@ -1,3 +1,3 @@
-from .metrics import SegmentationMetrics, mean_iou
+from .metrics import SegmentationMetrics, class_iou, mean_iou
 
-__all__ = ["SegmentationMetrics", "mean_iou"]
+__all__ = ["SegmentationMetrics", "class_iou", "mean_iou"]

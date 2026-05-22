@@ -7,6 +7,7 @@ import torch
 
 from config import Config
 from data import CrackDataset
+from data.dataset import _collect_pairs, split_pairs
 from models import MambaCrackNet
 from utils import SegmentationMetrics
 
@@ -16,6 +17,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate MambaCrackNet")
     parser.add_argument("--image-test-dir", default=cfg.data.image_test_dir)
     parser.add_argument("--mask-test-dir", default=cfg.data.mask_test_dir)
+    parser.add_argument(
+        "--test-split",
+        type=float,
+        default=None,
+        help=(
+            "If set, evaluate only the held-out portion of a deterministic split. "
+            "Use the same value of --seed used during training to reproduce its test set."
+        ),
+    )
+    parser.add_argument("--seed", type=int, default=cfg.train.seed)
     parser.add_argument("--checkpoint", default=cfg.train.checkpoint_path)
     parser.add_argument("--batch-size", type=int, default=cfg.data.batch_size)
     parser.add_argument(
@@ -30,12 +41,23 @@ def main() -> None:
     device = torch.device(args.device)
     cfg = Config()
 
-    dataset = CrackDataset(
-        args.image_test_dir,
-        args.mask_test_dir,
-        image_size=cfg.model.input_size,
-        train=False,
-    )
+    if args.test_split is not None:
+        all_pairs = _collect_pairs(args.image_test_dir, args.mask_test_dir)
+        _train, test_pairs = split_pairs(all_pairs, args.test_split, args.seed)
+        print(
+            f"Single-source split: evaluating {len(test_pairs)} held-out pair(s) "
+            f"out of {len(all_pairs)} (ratio={args.test_split}, seed={args.seed})"
+        )
+        dataset = CrackDataset(
+            pairs=test_pairs, image_size=cfg.model.input_size, train=False
+        )
+    else:
+        dataset = CrackDataset(
+            args.image_test_dir,
+            args.mask_test_dir,
+            image_size=cfg.model.input_size,
+            train=False,
+        )
     loader = torch.utils.data.DataLoader(
         dataset, batch_size=args.batch_size, shuffle=False
     )
