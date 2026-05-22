@@ -105,6 +105,34 @@ python test.py \
 
 Note that `test.py` evaluates over **all** pairs in the folders you give it; to match the training-time test split exactly, point it at a held-out folder or symlink only the 89 test images / masks there.
 
+## Fine-tuning on all four datasets (mixed)
+
+Once the CCSD baseline is in place, [finetune.py](finetune.py) continues training on the **naive concatenation of all five unified subsets** (CCSD + BCL_NonSteel + BCL_Steel + NCCD + LCW). It deterministically splits each source 80/20 with the given seed, pools the train sides into a single shuffled loader, and reports **per-source metrics at the end** so you can tell whether the model just learns to fit the dominant sources (BCL/NCCD account for ~70% of pairs).
+
+```bash
+mkdir -p logs checkpoints
+
+nohup python finetune.py \
+    --unified-root /workspace/nas_200/minkyung/unified \
+    --datasets     CCSD,BCL_NonSteel,BCL_Steel,NCCD,LCW \
+    --resume       ./checkpoints/ccsd_baseline.pt \
+    --test-split   0.2 --seed 2024 \
+    --epochs       10 --batch-size 2 --lr 1e-5 \
+    --checkpoint   ./checkpoints/multidataset_finetune.pt \
+    > logs/multidataset_finetune.log 2>&1 &
+```
+
+What this does:
+
+- splits each unified subset 80/20 (357/89 for CCSD, 4615/1154 for BCL_NonSteel, …) for a total of **13,929 train / 3,483 test pairs**;
+- loads `--resume` weights, then continues with **Adam, `lr=1e-5`** (= baseline ×0.1) and `CrossEntropyLoss` for 10 epochs;
+- saves a new checkpoint every time the *aggregate* validation mean-IoU improves;
+- after the last epoch, reloads the best checkpoint and prints the full 9-metric suite **per source** + aggregate.
+
+Expected runtime: **~13 hours** on a single RTX A5000 at `batch_size=2` (≈76 min/epoch). Watch progress with `tail -f logs/multidataset_finetune.log`.
+
+If you want to fine-tune on a different subset combo, just edit `--datasets` (comma-separated, case-sensitive folder names under `--unified-root`).
+
 ## Inspecting predictions visually
 
 Use [inference.py](inference.py) to render per-image visualisations from a trained checkpoint. Each output is a single PNG that tiles four panels horizontally — `input | ground truth | prediction (with per-image IoU) | red overlay` — so you can scroll through them in VSCode or any image viewer.

@@ -178,3 +178,69 @@ def build_dataloaders_split(
         len(train_pairs),
         len(test_pairs),
     )
+
+
+def build_multi_dataloaders_split(
+    sources,
+    test_ratio: float = 0.2,
+    seed: int = 2024,
+    image_size: Tuple[int, int] = (512, 512),
+    batch_size: int = 2,
+    num_workers: int = 0,
+):
+    """Build train / combined-test / per-source-test loaders for multiple datasets.
+
+    Each source is split deterministically with the same ``(test_ratio, seed)``;
+    the train sides are pooled into a single shuffled loader (naive concat), the
+    test sides are exposed both pooled (for the per-epoch valid signal) and
+    per-source (for end-of-training breakdowns).
+
+    Parameters
+    ----------
+    sources : dict[str, tuple[str, str]]
+        Ordered mapping from source short-name → (image_dir, mask_dir).
+
+    Returns
+    -------
+    train_loader : DataLoader
+    combined_test_loader : DataLoader
+    per_source_test_loaders : dict[str, DataLoader]
+    counts : dict[str, tuple[int, int]]
+        For each source: (n_train, n_test).
+    """
+    train_pairs_pooled: List[Tuple[str, str]] = []
+    per_source_test_pairs = {}
+    counts = {}
+
+    for name, (img_dir, mask_dir) in sources.items():
+        pairs = _collect_pairs(img_dir, mask_dir)
+        if not pairs:
+            raise RuntimeError(
+                f"Source '{name}': no image/mask pairs found in {img_dir} <-> {mask_dir}"
+            )
+        train_p, test_p = split_pairs(pairs, test_ratio, seed)
+        train_pairs_pooled.extend(train_p)
+        per_source_test_pairs[name] = test_p
+        counts[name] = (len(train_p), len(test_p))
+
+    combined_test_pairs = [p for ps in per_source_test_pairs.values() for p in ps]
+
+    train_ds = CrackDataset(pairs=train_pairs_pooled, image_size=image_size, train=True)
+    combined_test_ds = CrackDataset(
+        pairs=combined_test_pairs, image_size=image_size, train=False
+    )
+
+    per_source_test_loaders = {
+        name: _make_loader(
+            CrackDataset(pairs=pairs, image_size=image_size, train=False),
+            batch_size, num_workers, shuffle=False,
+        )
+        for name, pairs in per_source_test_pairs.items()
+    }
+
+    return (
+        _make_loader(train_ds, batch_size, num_workers, shuffle=True),
+        _make_loader(combined_test_ds, batch_size, num_workers, shuffle=False),
+        per_source_test_loaders,
+        counts,
+    )

@@ -159,7 +159,35 @@ python train.py \
 
 ### Fine-tuning on the four-dataset mixture
 
-After the CCSD baseline checkpoint is saved, fine-tune on the union of all five subset folders (`CCSD`, `BCL_NonSteel`, `BCL_Steel`, `NCCD`, `LCW`). The simplest realisation is to create a fifth folder that contains symlinks to every unified `images/` and `masks/` pair, then point the CLI at it. If you prefer per-subset weighting (e.g. up-sampling LCW because it has the smallest pair count), capture the recipe in this README when you settle on it.
+After the CCSD baseline checkpoint is saved, use [`finetune.py`](../finetune.py) to continue training on the union of all five subset folders. It splits each source 80/20 with `--seed` (independent of the others), pools the train sides into a single shuffled loader (naive concat), and reports **per-source metrics at the end** so you can see how well the fine-tuned model generalises to each dataset individually.
+
+```bash
+nohup python finetune.py \
+    --unified-root /workspace/nas_200/minkyung/unified \
+    --datasets     CCSD,BCL_NonSteel,BCL_Steel,NCCD,LCW \
+    --resume       ./checkpoints/ccsd_baseline.pt \
+    --test-split   0.2 --seed 2024 \
+    --epochs       10 --batch-size 2 --lr 1e-5 \
+    --checkpoint   ./checkpoints/multidataset_finetune.pt \
+    > logs/multidataset_finetune.log 2>&1 &
+```
+
+Defaults (Adam, `lr=1e-5`, 10 epochs, naive concat) match what we currently have in the main README; the script will reject an unknown subset name and abort early if any `<unified-root>/<name>/{images,masks}` is missing.
+
+Per-source train/test pair counts under `--test-split 0.2 --seed 2024`:
+
+| source | train | test |
+|---|---:|---:|
+| CCSD          |    357 |    89 |
+| BCL_NonSteel  |  4,615 | 1,154 |
+| BCL_Steel     |  1,629 |   407 |
+| NCCD          |  4,310 | 1,078 |
+| LCW           |  3,018 |   755 |
+| **TOTAL**     | **13,929** | **3,483** |
+
+(LCW count assumes the unify script has completed — re-run `/workspace/nas_200/minkyung/unify_datasets.py` if any of the `images/` folders look out of sync with `masks/`.)
+
+If you later want **balanced sampling** (uniform sampling per source rather than naive concat), or **subsampling** the dominant subsets, both can be added on top of `build_multi_dataloaders_split` in [`data/dataset.py`](../data/dataset.py) without changing `finetune.py`'s interface.
 
 ### Status of the unification (as of last NAS check)
 
