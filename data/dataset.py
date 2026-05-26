@@ -7,7 +7,7 @@ from typing import List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 from PIL import Image, ImageFile
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 # Some images in the public CCSD distribution (e.g. 593.JPG) are missing the EOI
 # marker and PIL refuses to decode them by default. Allow decoding to consume
@@ -187,18 +187,29 @@ def build_multi_dataloaders_split(
     image_size: Tuple[int, int] = (512, 512),
     batch_size: int = 2,
     num_workers: int = 0,
+    sampling: str = "naive",
+    samples_per_epoch: Optional[int] = None,
 ):
     """Build train / combined-test / per-source-test loaders for multiple datasets.
 
     Each source is split deterministically with the same ``(test_ratio, seed)``;
-    the train sides are pooled into a single shuffled loader (naive concat), the
-    test sides are exposed both pooled (for the per-epoch valid signal) and
-    per-source (for end-of-training breakdowns).
+    the train sides are pooled into a single loader, the test sides are exposed
+    both pooled (for the per-epoch valid signal) and per-source (for
+    end-of-training breakdowns).
 
     Parameters
     ----------
     sources : dict[str, tuple[str, str]]
         Ordered mapping from source short-name → (image_dir, mask_dir).
+    sampling : {"naive", "balanced"}
+        ``naive`` — pool all train pairs and shuffle (large sources dominate).
+        ``balanced`` — use ``WeightedRandomSampler`` so each source contributes
+        roughly equally per batch. Each pair gets weight ``1 / n_source``, which
+        means small sources are oversampled and large sources are subsampled.
+    samples_per_epoch : int, optional
+        Number of samples drawn per epoch when ``sampling="balanced"``. Defaults
+        to ``len(train_pairs_pooled)`` so wall-clock time matches naive concat.
+        Ignored when ``sampling="naive"``.
 
     Returns
     -------
@@ -208,7 +219,11 @@ def build_multi_dataloaders_split(
     counts : dict[str, tuple[int, int]]
         For each source: (n_train, n_test).
     """
+    if sampling not in ("naive", "balanced"):
+        raise ValueError(f"sampling must be 'naive' or 'balanced', got {sampling!r}")
+
     train_pairs_pooled: List[Tuple[str, str]] = []
+    pair_weights: List[float] = []
     per_source_test_pairs = {}
     counts = {}
 
@@ -220,6 +235,8 @@ def build_multi_dataloaders_split(
             )
         train_p, test_p = split_pairs(pairs, test_ratio, seed)
         train_pairs_pooled.extend(train_p)
+        # weight per pair so that every source contributes total weight = 1
+        pair_weights.extend([1.0 / len(train_p)] * len(train_p))
         per_source_test_pairs[name] = test_p
         counts[name] = (len(train_p), len(test_p))
 
@@ -228,6 +245,30 @@ def build_multi_dataloaders_split(
     train_ds = CrackDataset(pairs=train_pairs_pooled, image_size=image_size, train=True)
     combined_test_ds = CrackDataset(
         pairs=combined_test_pairs, image_size=image_size, train=False
+    )
+
+    if sampling == "balanced":
+        n_samples = (
+            samples_per_epoch if samples_per_epoch is not None else len(train_pairs_pooled)
+        )
+        sampler = WeightedRandomSampler(
+            weights=torch.as_tensor(pair_weights, dtype=torch.double),
+            num_samples=n_samples,
+            replacement=True,
+        )
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=batch_size,
+            sampler=sampler,
+            num_workers=num_workers,
+            drop_last=False,
+            pin_memory=True,
+        )
+    else:
+        train_loader = _make_loader(train_ds, batch_size, num_workers, shuffle=True)
+
+    combined_test_loader = _make_loader(
+        combined_test_ds, batch_size, num_workers, shuffle=False
     )
 
     per_source_test_loaders = {
@@ -239,8 +280,8 @@ def build_multi_dataloaders_split(
     }
 
     return (
-        _make_loader(train_ds, batch_size, num_workers, shuffle=True),
-        _make_loader(combined_test_ds, batch_size, num_workers, shuffle=False),
+        train_loader,
+        combined_test_loader,
         per_source_test_loaders,
         counts,
     )
