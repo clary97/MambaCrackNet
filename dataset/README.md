@@ -187,7 +187,9 @@ Per-source train/test pair counts under `--test-split 0.2 --seed 2024`:
 
 (LCW count assumes the unify script has completed — re-run `/workspace/nas_200/minkyung/unify_datasets.py` if any of the `images/` folders look out of sync with `masks/`.)
 
-If you later want **balanced sampling** (uniform sampling per source rather than naive concat), or **subsampling** the dominant subsets, both can be added on top of `build_multi_dataloaders_split` in [`data/dataset.py`](../data/dataset.py) without changing `finetune.py`'s interface.
+**Sampling / loss knobs.** `finetune.py` now supports `--sampling {naive,balanced}` and `--loss {ce,dice,tversky}` (with optional `--tversky-alpha`/`--tversky-beta`) so the 4-way ablation (CCSD baseline vs naive+CE vs balanced+CE vs naive+Dice) is a one-flag change. See the *Sampling and loss options* section in the main [README](../README.md) for ready-to-paste commands.
+
+`balanced` sampling assigns each pair weight `1 / n_source`, so the per-batch distribution becomes uniform across sources — small sources (CCSD, LCW) get heavily oversampled and large sources (BCL_NonSteel, NCCD) are seen ~60% of unique pairs per epoch.
 
 ### Status of the unification (as of last NAS check)
 

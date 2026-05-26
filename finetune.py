@@ -27,7 +27,7 @@ from torch.optim import Adam
 from config import Config
 from data import build_multi_dataloaders_split
 from models import MambaCrackNet
-from utils import SegmentationMetrics
+from utils import SegmentationMetrics, build_loss
 
 
 DEFAULT_DATASETS = "CCSD,BCL_NonSteel,BCL_Steel,NCCD,LCW"
@@ -64,6 +64,44 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=cfg.data.batch_size)
     parser.add_argument("--num-workers", type=int, default=cfg.data.num_workers)
     parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument(
+        "--sampling",
+        choices=["naive", "balanced"],
+        default="naive",
+        help=(
+            "naive    — pool all train pairs and shuffle (large sources dominate).\n"
+            "balanced — WeightedRandomSampler so each source contributes ~equally "
+            "per batch (small sources oversampled)."
+        ),
+    )
+    parser.add_argument(
+        "--samples-per-epoch",
+        type=int,
+        default=None,
+        help="Only used with --sampling balanced. Defaults to the pooled train size.",
+    )
+    parser.add_argument(
+        "--loss",
+        choices=["ce", "dice", "tversky"],
+        default="ce",
+        help=(
+            "ce      — CrossEntropyLoss (default; matches original recipe).\n"
+            "dice    — soft Dice on the crack class (class-imbalance robust).\n"
+            "tversky — Tversky with alpha/beta knobs for recall vs precision."
+        ),
+    )
+    parser.add_argument(
+        "--tversky-alpha",
+        type=float,
+        default=0.3,
+        help="FP weight in Tversky (smaller = more FP tolerated). Only with --loss tversky.",
+    )
+    parser.add_argument(
+        "--tversky-beta",
+        type=float,
+        default=0.7,
+        help="FN weight in Tversky (larger = recall favoured). Only with --loss tversky.",
+    )
     parser.add_argument(
         "--checkpoint",
         default="./checkpoints/multidataset_finetune.pt",
@@ -150,9 +188,19 @@ def main() -> None:
             image_size=cfg.model.input_size,
             batch_size=args.batch_size,
             num_workers=args.num_workers,
+            sampling=args.sampling,
+            samples_per_epoch=args.samples_per_epoch,
         )
     )
 
+    print(
+        f"Sampling      : {args.sampling}"
+        + (f"  (samples_per_epoch={args.samples_per_epoch})" if args.sampling == "balanced" and args.samples_per_epoch else "")
+    )
+    print(
+        f"Loss          : {args.loss}"
+        + (f"  (alpha={args.tversky_alpha}, beta={args.tversky_beta})" if args.loss == "tversky" else "")
+    )
     print("Per-source pair counts (test_split={:.2f}, seed={}):".format(args.test_split, args.seed))
     print(f"  {'source':<14}  {'train':>6}  {'test':>6}")
     n_train_total = n_test_total = 0
@@ -188,7 +236,11 @@ def main() -> None:
     )
 
     optimizer = Adam(model.parameters(), lr=args.lr)
-    loss_fn = nn.CrossEntropyLoss()
+    loss_fn = build_loss(
+        args.loss,
+        tversky_alpha=args.tversky_alpha,
+        tversky_beta=args.tversky_beta,
+    )
 
     Path(args.checkpoint).parent.mkdir(parents=True, exist_ok=True)
     best_iou = -1.0
@@ -208,6 +260,11 @@ def main() -> None:
                     "valid_iou": valid_iou,
                     "sources": list(sources.keys()),
                     "resume_from": str(resume_path),
+                    "sampling": args.sampling,
+                    "loss": args.loss,
+                    "tversky_alpha": args.tversky_alpha if args.loss == "tversky" else None,
+                    "tversky_beta": args.tversky_beta if args.loss == "tversky" else None,
+                    "lr": args.lr,
                 },
                 args.checkpoint,
             )

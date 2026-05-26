@@ -133,6 +133,51 @@ Expected runtime: **~13 hours** on a single RTX A5000 at `batch_size=2` (≈76 m
 
 If you want to fine-tune on a different subset combo, just edit `--datasets` (comma-separated, case-sensitive folder names under `--unified-root`).
 
+### Sampling and loss options (ablation knobs)
+
+`finetune.py` exposes two orthogonal knobs to address the catastrophic-forgetting / class-imbalance issues that naive concat + CE loss surfaces:
+
+| Flag | Choices | Default | Effect |
+|---|---|---|---|
+| `--sampling` | `naive`, `balanced` | `naive` | `balanced` uses `WeightedRandomSampler` so each source contributes ~equally per batch (small sources oversampled, large sources subsampled). |
+| `--loss` | `ce`, `dice`, `tversky` | `ce` | `dice` is the soft Dice on the crack class. `tversky` uses `--tversky-alpha` (FP weight) and `--tversky-beta` (FN weight, default 0.7) — set `β > α` to favour recall. |
+
+Recommended ablation runs (4-way comparison vs CCSD baseline):
+
+```bash
+# Run ③ — balanced sampling, keep CE
+nohup python finetune.py \
+    --unified-root /workspace/nas_200/minkyung/unified \
+    --datasets     CCSD,BCL_NonSteel,BCL_Steel,NCCD,LCW \
+    --resume       ./checkpoints/ccsd_baseline.pt \
+    --sampling     balanced \
+    --loss         ce \
+    --test-split   0.2 --seed 2024 \
+    --epochs 10 --batch-size 2 --lr 1e-5 \
+    --checkpoint   ./checkpoints/multidataset_finetune_balanced_ce.pt \
+    > logs/multidataset_finetune_balanced_ce.log 2>&1 &
+
+# Run ④ — keep naive concat, swap to Dice loss
+nohup python finetune.py \
+    --unified-root /workspace/nas_200/minkyung/unified \
+    --datasets     CCSD,BCL_NonSteel,BCL_Steel,NCCD,LCW \
+    --resume       ./checkpoints/ccsd_baseline.pt \
+    --sampling     naive \
+    --loss         dice \
+    --test-split   0.2 --seed 2024 \
+    --epochs 10 --batch-size 2 --lr 1e-5 \
+    --checkpoint   ./checkpoints/multidataset_finetune_naive_dice.pt \
+    > logs/multidataset_finetune_naive_dice.log 2>&1 &
+```
+
+Each run takes ~13 hours on a single RTX A5000. The saved checkpoint dict records `sampling`, `loss`, `tversky_alpha`, `tversky_beta`, `lr`, and `resume_from` so the recipe is always self-documenting:
+
+```python
+import torch
+c = torch.load("./checkpoints/multidataset_finetune_balanced_ce.pt", map_location="cpu")
+print(c["sampling"], c["loss"], c["lr"])    # → 'balanced' 'ce' 1e-05
+```
+
 ## Inspecting predictions visually
 
 Use [inference.py](inference.py) to render per-image visualisations from a trained checkpoint. Each output is a single PNG that tiles four panels horizontally — `input | ground truth | prediction (with per-image IoU) | red overlay` — so you can scroll through them in VSCode or any image viewer.
