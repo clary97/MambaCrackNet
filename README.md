@@ -140,7 +140,7 @@ If you want to fine-tune on a different subset combo, just edit `--datasets` (co
 | Flag | Choices | Default | Effect |
 |---|---|---|---|
 | `--sampling` | `naive`, `balanced` | `naive` | `balanced` uses `WeightedRandomSampler` so each source contributes ~equally per batch (small sources oversampled, large sources subsampled). |
-| `--loss` | `ce`, `dice`, `tversky` | `ce` | `dice` is the soft Dice on the crack class. `tversky` uses `--tversky-alpha` (FP weight) and `--tversky-beta` (FN weight, default 0.7) — set `β > α` to favour recall. |
+| `--loss` | `ce`, `dice`, `tversky`, `ce_dice` | `ce` | `dice` is the soft Dice on the crack class. `tversky` uses `--tversky-alpha` (FP weight) and `--tversky-beta` (FN weight, default 0.7) — set `β > α` to favour recall. `ce_dice` is `0.5*CE + 0.5*Dice` — the recommended choice when pure Dice collapses to "predict all background" at low LR. |
 
 Recommended ablation runs (4-way comparison vs CCSD baseline):
 
@@ -176,6 +176,49 @@ Each run takes ~13 hours on a single RTX A5000. The saved checkpoint dict record
 import torch
 c = torch.load("./checkpoints/multidataset_finetune_balanced_ce.pt", map_location="cpu")
 print(c["sampling"], c["loss"], c["lr"])    # → 'balanced' 'ce' 1e-05
+```
+
+### Resuming an interrupted run (crash / reboot safety)
+
+`finetune.py` writes a **full training-state checkpoint every epoch** next to the best checkpoint, named `<checkpoint>.last.pt` (e.g. `multidataset_finetune_naive_cedice.last.pt`). It contains the model weights, optimizer state, epoch counter, best-IoU-so-far, and RNG state.
+
+There are two distinct flags:
+
+| Flag | Use | Restores |
+|---|---|---|
+| `--resume` | Start a **fresh** fine-tune from a baseline | model weights only (epoch resets to 0) |
+| `--resume-training` | **Continue** a run that was killed mid-way | model + optimizer + epoch + best-IoU + RNG |
+
+So if a run dies at epoch 5, restart it with the **same flags** plus `--resume-training`:
+
+```bash
+nohup python finetune.py \
+    --unified-root /workspace/nas_200/minkyung/unified \
+    --datasets     CCSD,BCL_NonSteel,BCL_Steel,NCCD,LCW \
+    --sampling     naive --loss ce_dice \
+    --test-split   0.2 --seed 2024 \
+    --epochs 10 --batch-size 2 --lr 1e-5 \
+    --checkpoint   ./checkpoints/multidataset_finetune_naive_cedice.pt \
+    --resume-training ./checkpoints/multidataset_finetune_naive_cedice.last.pt \
+    >> logs/multidataset_finetune_naive_cedice.log 2>&1 &
+```
+
+It picks up at the epoch after the last completed one (e.g. epoch 6) and keeps the best checkpoint from before the crash. `--resume-training` takes precedence over `--resume`, so the baseline flag can be dropped when continuing.
+
+### Recommended retry for the Dice run (avoids the pure-Dice stall)
+
+Pure `--loss dice` at `lr=1e-5` can freeze (validation IoU identical every epoch — the model collapses to all-background). Prefer the combined loss:
+
+```bash
+nohup python finetune.py \
+    --unified-root /workspace/nas_200/minkyung/unified \
+    --datasets     CCSD,BCL_NonSteel,BCL_Steel,NCCD,LCW \
+    --resume       ./checkpoints/ccsd_baseline.pt \
+    --sampling     naive --loss ce_dice \
+    --test-split   0.2 --seed 2024 \
+    --epochs 10 --batch-size 2 --lr 1e-5 \
+    --checkpoint   ./checkpoints/multidataset_finetune_naive_cedice.pt \
+    > logs/multidataset_finetune_naive_cedice.log 2>&1 &
 ```
 
 ## Inspecting predictions visually

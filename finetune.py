@@ -17,7 +17,7 @@ Example:
 import argparse
 import random
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import torch
@@ -40,6 +40,46 @@ def set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
+def _rng_state() -> dict:
+    return {
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        "numpy": np.random.get_state(),
+        "python": random.getstate(),
+    }
+
+
+def _restore_rng(rng: Optional[dict]) -> None:
+    if not rng:
+        return
+    try:
+        torch.set_rng_state(rng["torch"])
+        if torch.cuda.is_available() and rng.get("cuda") is not None:
+            torch.cuda.set_rng_state_all(rng["cuda"])
+        np.random.set_state(rng["numpy"])
+        random.setstate(rng["python"])
+    except Exception as exc:  # best-effort; non-fatal
+        print(f"[warn] could not fully restore RNG state: {exc}", flush=True)
+
+
+def save_training_state(path, model, optimizer, epoch, best_iou, args, sources) -> None:
+    """Full state for crash recovery — overwritten every epoch."""
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "epoch": epoch,
+            "best_iou": best_iou,
+            "sources": list(sources.keys()),
+            "sampling": args.sampling,
+            "loss": args.loss,
+            "lr": args.lr,
+            "rng": _rng_state(),
+        },
+        path,
+    )
+
+
 def parse_args() -> argparse.Namespace:
     cfg = Config()
     parser = argparse.ArgumentParser(description="Fine-tune MambaCrackNet on multi-source data")
@@ -55,9 +95,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--resume",
-        required=True,
+        default=None,
         help="Path to a baseline checkpoint to initialise weights from "
-        "(e.g. ./checkpoints/ccsd_baseline.pt).",
+        "(e.g. ./checkpoints/ccsd_baseline.pt). Required unless --resume-training is given.",
+    )
+    parser.add_argument(
+        "--resume-training",
+        default=None,
+        help="Continue an interrupted run from a '*.last.pt' state checkpoint "
+        "(restores model + optimizer + epoch + best_iou + RNG). Other flags "
+        "should match the original run.",
     )
     parser.add_argument("--test-split", type=float, default=0.2)
     parser.add_argument("--epochs", type=int, default=10)
@@ -82,12 +129,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--loss",
-        choices=["ce", "dice", "tversky"],
+        choices=["ce", "dice", "tversky", "ce_dice"],
         default="ce",
         help=(
             "ce      — CrossEntropyLoss (default; matches original recipe).\n"
             "dice    — soft Dice on the crack class (class-imbalance robust).\n"
-            "tversky — Tversky with alpha/beta knobs for recall vs precision."
+            "tversky — Tversky with alpha/beta knobs for recall vs precision.\n"
+            "ce_dice — 0.5*CE + 0.5*Dice (stable gradient + imbalance robust; "
+            "avoids the pure-Dice collapse)."
         ),
     )
     parser.add_argument(
@@ -222,19 +271,6 @@ def main() -> None:
         expand=cfg.model.expand,
     ).to(device)
 
-    resume_path = Path(args.resume)
-    if not resume_path.exists():
-        raise FileNotFoundError(f"--resume checkpoint not found: {resume_path}")
-    base_ckpt = torch.load(resume_path, map_location=device)
-    state = base_ckpt.get("model_state_dict", base_ckpt)
-    model.load_state_dict(state)
-    print(
-        f"\nResumed weights from {resume_path} "
-        f"(epoch={base_ckpt.get('epoch', '?')}, "
-        f"valid_iou={base_ckpt.get('valid_iou', float('nan')):.4f})",
-        flush=True,
-    )
-
     optimizer = Adam(model.parameters(), lr=args.lr)
     loss_fn = build_loss(
         args.loss,
@@ -243,8 +279,60 @@ def main() -> None:
     )
 
     Path(args.checkpoint).parent.mkdir(parents=True, exist_ok=True)
+    ckpt_path = Path(args.checkpoint)
+    # full-state checkpoint for crash recovery, e.g. foo.pt -> foo.last.pt
+    state_ckpt_path = ckpt_path.with_name(ckpt_path.stem + ".last" + ckpt_path.suffix)
+
+    start_epoch = 0
     best_iou = -1.0
-    for epoch in range(args.epochs):
+    resume_from = args.resume
+
+    if args.resume_training:
+        # ---- continue an interrupted run (model + optimizer + epoch + RNG) ----
+        rt_path = Path(args.resume_training)
+        if not rt_path.exists():
+            raise FileNotFoundError(f"--resume-training checkpoint not found: {rt_path}")
+        # our own trusted file; contains numpy/python RNG state that the default
+        # weights_only=True loader (PyTorch >= 2.6) refuses to unpickle.
+        st = torch.load(rt_path, map_location=device, weights_only=False)
+        model.load_state_dict(st["model_state_dict"])
+        optimizer.load_state_dict(st["optimizer_state_dict"])
+        start_epoch = int(st["epoch"]) + 1
+        best_iou = float(st.get("best_iou", -1.0))
+        _restore_rng(st.get("rng"))
+        resume_from = str(rt_path)
+        print(
+            f"\nResumed TRAINING from {rt_path}: continuing at epoch "
+            f"{start_epoch}/{args.epochs} (best_iou so far={best_iou:.6f})",
+            flush=True,
+        )
+    else:
+        # ---- fresh fine-tune: initialise weights from a baseline checkpoint ----
+        if not args.resume:
+            raise ValueError(
+                "Provide --resume (fresh fine-tune from a baseline) "
+                "or --resume-training (continue an interrupted run)."
+            )
+        resume_path = Path(args.resume)
+        if not resume_path.exists():
+            raise FileNotFoundError(f"--resume checkpoint not found: {resume_path}")
+        base_ckpt = torch.load(resume_path, map_location=device)
+        model.load_state_dict(base_ckpt.get("model_state_dict", base_ckpt))
+        print(
+            f"\nResumed weights from {resume_path} "
+            f"(epoch={base_ckpt.get('epoch', '?')}, "
+            f"valid_iou={base_ckpt.get('valid_iou', float('nan')):.4f})",
+            flush=True,
+        )
+
+    if start_epoch >= args.epochs:
+        print(
+            f"start_epoch ({start_epoch}) >= --epochs ({args.epochs}); "
+            "skipping training and running final evaluation only.",
+            flush=True,
+        )
+
+    for epoch in range(start_epoch, args.epochs):
         train_loss = train_one_epoch(model, train_loader, optimizer, loss_fn, device)
         valid_iou = evaluate_iou(model, combined_test_loader, device)
         print(
@@ -259,7 +347,7 @@ def main() -> None:
                     "epoch": epoch,
                     "valid_iou": valid_iou,
                     "sources": list(sources.keys()),
-                    "resume_from": str(resume_path),
+                    "resume_from": str(resume_from),
                     "sampling": args.sampling,
                     "loss": args.loss,
                     "tversky_alpha": args.tversky_alpha if args.loss == "tversky" else None,
@@ -268,7 +356,10 @@ def main() -> None:
                 },
                 args.checkpoint,
             )
-            print(f"  -> saved checkpoint ({args.checkpoint})", flush=True)
+            print(f"  -> saved best checkpoint ({args.checkpoint})", flush=True)
+
+        # always persist full training state so a reboot can resume this epoch
+        save_training_state(state_ckpt_path, model, optimizer, epoch, best_iou, args, sources)
 
     # ---- final per-source evaluation with the best checkpoint --------------
     ckpt = torch.load(args.checkpoint, map_location=device)

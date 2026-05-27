@@ -64,14 +64,42 @@ class TverskyLoss(nn.Module):
         return 1.0 - tversky.mean()
 
 
+class CEDiceLoss(nn.Module):
+    """Weighted sum of CrossEntropy and Dice.
+
+    CE provides a stable, dense gradient signal while Dice directly optimises
+    crack-class overlap. The combination avoids the "predict all background"
+    collapse that pure Dice can fall into at low learning rates.
+    """
+
+    def __init__(
+        self,
+        ce_weight: float = 0.5,
+        dice_weight: float = 0.5,
+        dice_smooth: float = 1.0,
+    ):
+        super().__init__()
+        self.ce = nn.CrossEntropyLoss()
+        self.dice = DiceLoss(smooth=dice_smooth)
+        self.ce_weight = ce_weight
+        self.dice_weight = dice_weight
+
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        return self.ce_weight * self.ce(logits, target) + self.dice_weight * self.dice(
+            logits, target
+        )
+
+
 def build_loss(
     name: str,
     *,
     dice_smooth: float = 1.0,
     tversky_alpha: float = 0.3,
     tversky_beta: float = 0.7,
+    ce_weight: float = 0.5,
+    dice_weight: float = 0.5,
 ) -> nn.Module:
-    """Factory: ``name`` ∈ {'ce', 'dice', 'tversky'}."""
+    """Factory: ``name`` ∈ {'ce', 'dice', 'tversky', 'ce_dice'}."""
     name = name.lower()
     if name == "ce":
         return nn.CrossEntropyLoss()
@@ -79,4 +107,10 @@ def build_loss(
         return DiceLoss(smooth=dice_smooth)
     if name == "tversky":
         return TverskyLoss(alpha=tversky_alpha, beta=tversky_beta, smooth=dice_smooth)
-    raise ValueError(f"Unknown loss '{name}'. Choose from: ce, dice, tversky.")
+    if name == "ce_dice":
+        return CEDiceLoss(
+            ce_weight=ce_weight, dice_weight=dice_weight, dice_smooth=dice_smooth
+        )
+    raise ValueError(
+        f"Unknown loss '{name}'. Choose from: ce, dice, tversky, ce_dice."
+    )
